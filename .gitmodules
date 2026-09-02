@@ -1,0 +1,20 @@
+[submodule "upstreams/codex"]
+	path = upstreams/codex
+	url = https://github.com/openai/codex.git
+	shallow = true
+[submodule "upstreams/opencode"]
+	path = upstreams/opencode
+	url = https://github.com/anomalyco/opencode.git
+	shallow = true
+[submodule "upstreams/pi"]
+	path = upstreams/pi
+	url = https://github.com/earendil-works/pi.git
+	shallow = true
+[submodule "upstreams/deepseek-harness"]
+	path = upstreams/deepseek-harness
+	url = https://github.com/deepseek-ai/deepseek-harness.git
+	shallow = true
+[submodule "upstreams/symphony"]
+	path = upstreams/symphony
+	url = https://github.com/openai/symphony.git
+	shallow = true
