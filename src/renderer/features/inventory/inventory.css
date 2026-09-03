@@ -1,0 +1,151 @@
+.oa-inventory {
+  box-sizing: border-box;
+  color: var(--oa-text);
+  margin: 0 auto;
+  max-width: 784px;
+  overflow: auto;
+  padding: 50px 22px 36px;
+  width: 100%;
+}
+
+.oa-inventory__header,
+.oa-inventory__header > div,
+.oa-inventory__metadata,
+.oa-inventory__row {
+  align-items: center;
+  display: flex;
+}
+
+.oa-inventory__header {
+  justify-content: space-between;
+  margin-bottom: 30px;
+}
+
+.oa-inventory__header > div {
+  gap: 9px;
+}
+
+.oa-inventory h1,
+.oa-inventory h2,
+.oa-inventory p {
+  margin: 0;
+}
+
+.oa-inventory h1 {
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.oa-inventory h2 {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.oa-inventory__content {
+  display: grid;
+  gap: 22px;
+}
+
+.oa-inventory__metadata {
+  color: var(--oa-text-muted);
+  font-size: 12px;
+  gap: 12px;
+  min-width: 0;
+}
+
+.oa-inventory__metadata span {
+  align-items: center;
+  display: inline-flex;
+  gap: 5px;
+  max-width: 66%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.oa-inventory__list {
+  border-top: 1px solid var(--oa-border-subtle);
+}
+
+.oa-inventory__row {
+  border-bottom: 1px solid var(--oa-border-subtle);
+  color: inherit;
+  gap: 12px;
+  min-height: 54px;
+  padding: 8px 5px;
+  text-decoration: none;
+}
+
+a.oa-inventory__row:hover {
+  background: var(--oa-hover);
+}
+
+.oa-inventory__number,
+.oa-inventory__state,
+.oa-inventory__row-copy small,
+.oa-inventory__muted {
+  color: var(--oa-text-muted);
+  font-size: 12px;
+}
+
+.oa-inventory__number {
+  flex: 0 0 32px;
+}
+
+.oa-inventory__row-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.oa-inventory__row-copy strong,
+.oa-inventory__row-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.oa-inventory__row-copy strong {
+  font-size: 14px;
+  font-weight: 550;
+}
+
+.oa-inventory__state {
+  margin-left: auto;
+}
+
+.oa-inventory__changes {
+  display: grid;
+  gap: 10px;
+}
+
+.oa-inventory__changes pre {
+  background: var(--oa-elevated);
+  border: 1px solid var(--oa-border);
+  border-radius: 6px;
+  color: var(--oa-text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0;
+  overflow: auto;
+  padding: 11px;
+  white-space: pre-wrap;
+}
+
+.oa-inventory__muted,
+.oa-inventory__error {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.oa-inventory__error {
+  color: #ff6e6e;
+}
+
+@media (max-width: 780px) {
+  .oa-inventory {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}

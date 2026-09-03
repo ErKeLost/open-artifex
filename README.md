@@ -2,15 +2,17 @@
 
 Open Artifex is a local-first work and coding agent for the desktop.
 
-The project starts with a comparative study of leading open-source agent
-harnesses before its Electron and Mastra implementation is added.
+The desktop shell is Tauri 2. Rust owns native capabilities and process
+lifecycle, while the React renderer stays sandboxed and Mastra remains behind
+the agent runtime boundary.
 
 ## Architecture direction
 
-- Electron provides the desktop shell and native process boundary.
+- Tauri 2 provides the desktop shell and native process boundary.
+- Rust commands and Tauri events are the only renderer/native bridge.
 - Mastra provides the agent runtime and workspace primitives.
-- The renderer stays sandboxed; filesystem and process access belong to the
-  main process and are exposed through a narrow IPC API.
+- The renderer stays sandboxed; filesystem and process access belong to Rust
+  commands and are exposed through a narrow typed API.
 - Agent operations are scoped to a workspace explicitly selected by the user.
 
 ## Upstream references

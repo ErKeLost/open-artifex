@@ -4,7 +4,10 @@
 !.env.example
 node_modules/
 dist/
+.vite/
 out/
 release/
+.mastra/
+.open-artifex/
+tmp/
 *.log
-
