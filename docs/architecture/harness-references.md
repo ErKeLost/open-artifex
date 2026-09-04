@@ -26,7 +26,7 @@ The upstreams are pinned at these revisions:
 | DeepSeek Harness | `49a606bc5b5934603f22a26957a07dc799ab0291` | plugin seams, durable event projection, scoped tool/skill registries, cancellation and guarded self-modification |
 | OpenAI Symphony | `8001b52e3062495a16e520e4ceaf8f9de868c4d0` | outer work scheduler, isolated workspaces, reconciliation and retry |
 
-Installed Mastra versions used for the mapping are `@mastra/core@1.63.2`, `@mastra/memory@1.28.1`, and `@mastra/libsql@1.22.2`.
+Installed Mastra versions used for the mapping are `@mastra/core@1.63.2`, `@mastra/memory@1.28.1`, `@mastra/libsql@1.22.2`, and `@mastra/observability@1.17.5`.
 
 ## Architecture decision
 
@@ -41,7 +41,8 @@ Installed Mastra versions used for the mapping are `@mastra/core@1.63.2`, `@mast
                  -> custom createTool() coding tools
                  -> SkillSearchProcessor
                  -> Memory + LibSQL
-                 -> optional Mastra subagents/workflows/background tasks
+                 -> Mastra subagents/workflows/background tasks
+                 -> Observability + Dataset/Experiment improvement loop
 ```
 
 The agent host is an isolation and lifecycle boundary, not a second backend product. There is no requirement for a Hono or other localhost HTTP server. The packaged desktop app communicates through typed Tauri commands and events.
@@ -163,6 +164,9 @@ The following are verified against the embedded documentation and declaration fi
 | Deterministic multi-stage jobs | `createWorkflow()`, `createStep()`, `.commit()` | `node_modules/@mastra/core/dist/docs/references/docs-workflows-overview.md` |
 | Long-running tool jobs | Mastra `backgroundTasks`, `untilIdle`, manager events | `node_modules/@mastra/core/dist/docs/references/docs-harness-background-tasks.md` |
 | Subagents | Agent `agents` plus delegation options; optionally background-task execution | `node_modules/@mastra/core/dist/docs/references/docs-subagents.md` and `docs-harness-background-tasks.md`, “Subagents in the background” |
+| Persisted local traces and human feedback | `Observability` + `MastraStorageExporter` + `addFeedback()` | `node_modules/@mastra/observability/dist/default.d.ts`; `reference-observability-feedback.md` |
+| Versioned candidate/evaluation records | `mastra.datasets`, `Dataset.createExperiment()`, `submitExperimentResult()`, `finalizeExperiment()` | `node_modules/@mastra/core/dist/docs/references/docs-datasets-overview.md`; `docs-datasets-running-experiments.md` |
+| Human publication gate | workflow `suspend()` / `Run.resume()` | `node_modules/@mastra/core/dist/docs/references/docs-workflows-suspend-and-resume.md` |
 
 ### Important API consequences
 
@@ -308,26 +312,27 @@ This phase learns context, not code. It never edits agent instructions, tool def
 
 ### Phase 2: governed experience extraction
 
-Adapt Codex's two-phase pipeline into a Mastra workflow:
+Implemented in `src/agent/improvement/` as a Mastra-only control plane:
 
-1. a `createStep()` selects a bounded set of completed runs and redacts secrets;
-2. a separate regular `Agent` produces structured lessons, failures and candidate reusable procedures;
-3. another step deduplicates and scores candidates;
-4. store candidates in LibSQL as drafts with provenance (run IDs, tool versions, model and timestamp);
-5. no draft enters an active agent prompt automatically.
+1. Every completed interactive run starts `improvement-trace-capture`, a `createWorkflow()` graph. The persisted Dataset record holds only a bounded, credential-redacted prompt/result excerpt, model, tool names and terminal facts; the workflow's real Observability trace is the feedback anchor.
+2. `Observability` with `MastraStorageExporter` writes traces into the same LibSQL database. User ratings attach through `mastra.observability.addFeedback({ traceId, ... })`; raw provider credentials and private reasoning never cross into the candidate record.
+3. `improvement-candidate-draft` invokes a dedicated no-tool Mastra `Agent` with structured output. It produces an application operating-policy candidate only; it cannot edit source files, invoke a shell, call a browser, publish a skill, or mutate the workspace.
+4. `improvement-candidate-evaluation` invokes a separate no-tool evaluator Agent with structured output. Its real score and verdict are written through a versioned Mastra Dataset and caller-driven `Dataset.createExperiment()`, `submitExperimentResult()`, and `finalizeExperiment()` record.
+5. A candidate stays `draft` until the score gate passes. There is no automatic prompt mutation and no model-authored code execution.
 
-Use a workflow because the sequence, validation and retry policy are deterministic; do not ask the main coding agent to remember to do this.
+The controlled loop is deliberately narrow: it learns a published application operating policy from evidence. It does not yet materialize a filesystem skill or modify a user project.
 
-### Phase 3: approved skill publication
+### Phase 3: approved publication and rollback
 
-Borrow DeepSeek's immutable-version principle without executing model-authored plugins:
+Implemented publication is also Mastra-owned:
 
-1. materialize a candidate as an immutable skill version using a filesystem `SKILL.md`, a versioned skill source, or `createSkill()`;
-2. run offline evaluations against the candidate in an isolated test workspace;
-3. present the diff, evaluation result and provenance through a Mastra suspension/approval;
-4. only a human-approved version becomes `published`;
-5. the dynamic Agent/Workspace skills resolver exposes published versions on the next request;
-6. rollback selects the previous immutable version; it never rewrites history.
+1. an evaluated candidate enters `improvement-candidate-publication`, whose `approve-improvement-publication` step calls `suspend()` and persists the pending approval snapshot in LibSQL;
+2. the desktop explicitly resumes the run with `Run.resume({ resumeData: { approved } })`; rejecting it leaves an audited `rejected` version;
+3. approval publishes only the candidate's app-owned policy version, recorded in Mastra Dataset history;
+4. the active-version pointer and rollback history live in Mastra `ThreadStateStorage`;
+5. rollback selects the prior version or clears the active pointer. It never rewrites history or touches workspace files.
+
+Filesystem skill publication remains a future expansion. It must keep the same Dataset/Experiment gate and suspension before the dynamic skills resolver can see a new version.
 
 Explicitly rejected as “self-evolution”:
 

@@ -68,6 +68,9 @@ input.on("line", (line) => {
     case "conversation.command":
       trackRun(executeConversationCommand(message.requestId, message.command));
       break;
+    case "improvement.command":
+      trackRun(executeImprovementCommand(message.requestId, message.command));
+      break;
     case "agent.shutdown":
       void shutdown();
       break;
@@ -178,6 +181,47 @@ async function executeConversationCommand(
       requestId,
       ok: false,
       error: toAgentError(error, "CONVERSATION_OPERATION_FAILED", false),
+    });
+  }
+}
+
+async function executeImprovementCommand(
+  requestId: string,
+  command: JsonValue,
+): Promise<void> {
+  await runtimeReady;
+  if (shuttingDown || !runtime?.improvement) {
+    post({
+      version: AGENT_PROTOCOL_VERSION,
+      type: "improvement.response",
+      requestId,
+      ok: false,
+      error: {
+        code: shuttingDown ? "IMPROVEMENT_SHUTTING_DOWN" : "IMPROVEMENT_UNAVAILABLE",
+        message: shuttingDown
+          ? "Improvement service is shutting down"
+          : "Improvement service is unavailable",
+        retryable: true,
+      },
+    });
+    return;
+  }
+  try {
+    const value = await runtime.improvement.execute(command);
+    post({
+      version: AGENT_PROTOCOL_VERSION,
+      type: "improvement.response",
+      requestId,
+      ok: true,
+      value,
+    });
+  } catch (error) {
+    post({
+      version: AGENT_PROTOCOL_VERSION,
+      type: "improvement.response",
+      requestId,
+      ok: false,
+      error: toAgentError(error, "IMPROVEMENT_OPERATION_FAILED", false),
     });
   }
 }

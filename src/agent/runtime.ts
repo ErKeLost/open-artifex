@@ -6,6 +6,7 @@ import { AgentBrowser } from "@mastra/agent-browser";
 import { Agent } from "@mastra/core/agent";
 import { AgentController, type Session } from "@mastra/core/agent-controller";
 import { Mastra } from "@mastra/core";
+import { MastraStorageExporter, Observability } from "@mastra/observability";
 import type {
   AgentControllerEvent,
   ToolCategory,
@@ -26,6 +27,7 @@ import type {
   AgentRuntime,
   AgentRuntimeContext,
   AgentConversationRuntime,
+  AgentImprovementRuntime,
   AgentScheduleRuntime,
   AgentUsage,
   JsonValue,
@@ -38,6 +40,8 @@ import type {
 import { BrowserSessionService } from "./browser/browser-session-service.js";
 import { createToolFactoryContext } from "./core/tool-context.js";
 import { createCodingTools } from "./tools/index.js";
+import { ImprovementService } from "./improvement/service.js";
+import { redactForImprovement } from "./improvement/redaction.js";
 
 type RuntimeBundle = {
   agent: Agent;
@@ -48,6 +52,7 @@ type RuntimeBundle = {
   browserService: BrowserSessionService;
   storage: LibSQLStore;
   memory: Memory;
+  improvement: ImprovementService;
 };
 
 const LOCAL_RESOURCE_ID = "local-user";
@@ -71,6 +76,22 @@ type ConversationHostRequest = AgentRunRequest & {
     | { operation: "list" }
     | { operation: "messages"; threadId: string }
     | { operation: "create"; threadId: string; title: string };
+};
+
+type ImprovementHostRequest = AgentRunRequest & {
+  improvement:
+    | { operation: "list" }
+    | {
+        operation: "add-feedback";
+        traceId: string;
+        rating: 1 | -1;
+        comment?: string;
+      }
+    | { operation: "create-candidate"; traceId: string }
+    | { operation: "evaluate-candidate"; candidateId: string }
+    | { operation: "request-publication"; candidateId: string }
+    | { operation: "resolve-publication"; candidateId: string; approved: boolean }
+    | { operation: "rollback"; candidateId: string };
 };
 
 type MastraScheduleView = {
@@ -105,6 +126,10 @@ class MastraControllerRuntime implements AgentRuntime {
     execute: (command) => this.executeConversation(command),
   };
 
+  readonly improvement: AgentImprovementRuntime = {
+    execute: (command) => this.executeImprovement(command),
+  };
+
   async run(
     request: AgentRunRequest,
     context: AgentRuntimeContext,
@@ -134,6 +159,30 @@ class MastraControllerRuntime implements AgentRuntime {
     try {
       await session.sendMessage({ content: request.prompt });
       await ensureThreadTitle(bundle.memory, request.threadId, request.prompt);
+      try {
+        await bundle.improvement.captureRun({
+          id: request.runId,
+          threadId: request.threadId,
+          model: request.provider.model,
+          status: context.signal.aborted ? "cancelled" : "completed",
+          promptExcerpt: redactForImprovement(request.prompt, 4_000),
+          ...(state.finalText
+            ? { answerExcerpt: redactForImprovement(state.finalText, 4_000) }
+            : {}),
+          toolNames: [...state.toolNames].sort(),
+          toolCount: state.toolCount,
+          failedToolCount: state.failedToolCount,
+          createdAt: Date.now(),
+        });
+      } catch (error) {
+        context.emit({
+          type: "run.status",
+          payload: {
+            stage: "improvement-capture-error",
+            message: errorMessage(error),
+          },
+        });
+      }
       return {
         status: context.signal.aborted ? "cancelled" : "completed",
         finalText: state.finalText,
@@ -154,7 +203,7 @@ class MastraControllerRuntime implements AgentRuntime {
               result.value.browserService.dispose(),
               result.value.controller.destroy(),
               result.value.browser.close(),
-              result.value.mastra.stopWorkers(),
+              result.value.mastra.shutdown(),
             ]
           : [],
       ),
@@ -314,6 +363,34 @@ class MastraControllerRuntime implements AgentRuntime {
       }
     }
   }
+
+  private async executeImprovement(command: JsonValue): Promise<JsonValue> {
+    const request = parseImprovementRequest(command);
+    const bundle = await this.getBundle(request);
+    const input = request.improvement;
+    switch (input.operation) {
+      case "list":
+        return toJsonValue(await bundle.improvement.snapshot());
+      case "add-feedback":
+        await bundle.improvement.addFeedback(input);
+        return toJsonValue(await bundle.improvement.snapshot());
+      case "create-candidate":
+        await bundle.improvement.createCandidate(input.traceId);
+        return toJsonValue(await bundle.improvement.snapshot());
+      case "evaluate-candidate":
+        await bundle.improvement.evaluateCandidate(input.candidateId);
+        return toJsonValue(await bundle.improvement.snapshot());
+      case "request-publication":
+        await bundle.improvement.requestPublication(input.candidateId);
+        return toJsonValue(await bundle.improvement.snapshot());
+      case "resolve-publication":
+        await bundle.improvement.resolvePublication(input.candidateId, input.approved);
+        return toJsonValue(await bundle.improvement.snapshot());
+      case "rollback":
+        await bundle.improvement.rollback(input.candidateId);
+        return toJsonValue(await bundle.improvement.snapshot());
+    }
+  }
 }
 
 function parseScheduleRequest(value: JsonValue): ScheduleHostRequest {
@@ -443,6 +520,93 @@ function parseConversationRequest(value: JsonValue): ConversationHostRequest {
     };
   }
   throw new Error("Conversation operation is invalid");
+}
+
+function parseImprovementRequest(value: JsonValue): ImprovementHostRequest {
+  if (!isJsonObject(value)) throw new Error("Improvement request is invalid");
+  const workspacePath = boundedString(
+    value.workspacePath,
+    16_384,
+    "workspacePath",
+  );
+  const threadId = boundedString(value.threadId, 256, "threadId");
+  const model = boundedString(value.model, 256, "model");
+  const reasoningEffort = optionalReasoningEffort(value.reasoningEffort);
+  const provider = value.provider;
+  if (!isJsonObject(provider))
+    throw new Error("Improvement provider is invalid");
+  const apiKey = boundedString(provider.apiKey, 16_384, "provider.apiKey");
+  const providerModel = boundedString(provider.model, 256, "provider.model");
+  const improvement = value.improvement;
+  if (!isJsonObject(improvement) || typeof improvement.operation !== "string") {
+    throw new Error("Improvement operation is invalid");
+  }
+  const base: Omit<ImprovementHostRequest, "improvement"> = {
+    runId: `improvement-${Date.now()}`,
+    prompt: "",
+    threadId,
+    workspacePath,
+    model,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    provider: { kind: "openrouter", apiKey, model: providerModel },
+  };
+  if (improvement.operation === "list") {
+    return { ...base, improvement: { operation: "list" } };
+  }
+  if (improvement.operation === "add-feedback") {
+    const rating = improvement.rating;
+    if (rating !== 1 && rating !== -1) {
+      throw new Error("Improvement rating is invalid");
+    }
+    const comment = improvement.comment;
+    if (comment !== undefined && (typeof comment !== "string" || comment.length > 4_000)) {
+      throw new Error("Improvement comment is invalid");
+    }
+    return {
+      ...base,
+      improvement: {
+        operation: "add-feedback",
+        traceId: boundedString(improvement.traceId, 256, "traceId"),
+        rating,
+        ...(typeof comment === "string" && comment.trim()
+          ? { comment: comment.trim() }
+          : {}),
+      },
+    };
+  }
+  if (improvement.operation === "create-candidate") {
+    return {
+      ...base,
+      improvement: {
+        operation: "create-candidate",
+        traceId: boundedString(improvement.traceId, 256, "traceId"),
+      },
+    };
+  }
+  const candidateId = boundedString(improvement.candidateId, 256, "candidateId");
+  if (improvement.operation === "evaluate-candidate") {
+    return { ...base, improvement: { operation: "evaluate-candidate", candidateId } };
+  }
+  if (improvement.operation === "request-publication") {
+    return { ...base, improvement: { operation: "request-publication", candidateId } };
+  }
+  if (improvement.operation === "resolve-publication") {
+    if (typeof improvement.approved !== "boolean") {
+      throw new Error("Improvement publication decision is invalid");
+    }
+    return {
+      ...base,
+      improvement: {
+        operation: "resolve-publication",
+        candidateId,
+        approved: improvement.approved,
+      },
+    };
+  }
+  if (improvement.operation === "rollback") {
+    return { ...base, improvement: { operation: "rollback", candidateId } };
+  }
+  throw new Error("Improvement operation is invalid");
 }
 
 function toConversationThread(thread: {
@@ -640,6 +804,7 @@ async function createRuntimeBundle(
     id: `open-artifex-${stableId(workspacePath)}`,
     url: pathToFileURL(path.join(dataDirectory, "open-artifex.db")).href,
   });
+  await storage.init();
   const filesystem = new LocalFilesystem({
     basePath: workspacePath,
     contained: true,
@@ -672,6 +837,14 @@ async function createRuntimeBundle(
     blockingRefresh: true,
   });
   const memory = new Memory({ storage, options: { lastMessages: 50 } });
+  const observability = new Observability({
+    configs: {
+      default: {
+        serviceName: "open-artifex",
+        exporters: [new MastraStorageExporter()],
+      },
+    },
+  });
 
   const agent = new Agent({
     id: "open-artifex-agent",
@@ -701,6 +874,33 @@ async function createRuntimeBundle(
     workspace,
     inputProcessors: [skillSearch],
     tools: scheduledTools,
+  });
+  const improvementAnalyst = new Agent({
+    id: "improvement-analyst",
+    name: "Improvement Analyst",
+    instructions:
+      "Turn privacy-filtered run evidence and human feedback into a narrowly scoped, reversible operating-policy proposal. Never propose source edits, shell commands, external calls, credentials, or hidden reasoning.",
+    model: openrouter(
+      request.provider.model,
+      openRouterModelSettings(request.reasoningEffort),
+    ),
+  });
+  const improvementEvaluator = new Agent({
+    id: "improvement-evaluator",
+    name: "Improvement Evaluator",
+    instructions:
+      "Evaluate candidate operating policies conservatively. Approve only policies supported by the supplied evidence, free of secrets, side effects, source edits, and irreversible behavior.",
+    model: openrouter(
+      request.provider.model,
+      openRouterModelSettings(request.reasoningEffort),
+    ),
+  });
+  let mastra!: Mastra;
+  const improvement = new ImprovementService({
+    getMastra: () => mastra,
+    storage,
+    analyst: improvementAnalyst,
+    evaluator: improvementEvaluator,
   });
 
   const controller = new AgentController({
@@ -809,9 +1009,8 @@ async function createRuntimeBundle(
       },
     ],
     toolCategoryResolver,
+    observability,
   });
-  await controller.init();
-  let mastra!: Mastra;
   const completeOneTimeSchedule = async (
     scheduleId: string,
     lastError?: string,
@@ -828,8 +1027,23 @@ async function createRuntimeBundle(
     });
   };
   mastra = new Mastra({
-    agents: { openArtifex: agent, scheduled: scheduledAgent },
+    agents: {
+      openArtifex: agent,
+      scheduled: scheduledAgent,
+      improvementAnalyst,
+      improvementEvaluator,
+    },
+    agentControllers: { openArtifex: controller },
+    workflows: improvement.workflows,
     storage,
+    observability,
+    backgroundTasks: {
+      enabled: true,
+      globalConcurrency: 4,
+      perAgentConcurrency: 2,
+      backpressure: "queue",
+      defaultTimeoutMs: 300_000,
+    },
     scheduler: { enabled: true },
     schedules: {
       onFinish: async ({ schedule }) => completeOneTimeSchedule(schedule.id),
@@ -837,6 +1051,7 @@ async function createRuntimeBundle(
         completeOneTimeSchedule(schedule.id, error.message),
     },
   });
+  await controller.init();
   await mastra.startWorkers();
   return {
     agent,
@@ -847,6 +1062,7 @@ async function createRuntimeBundle(
     browserService,
     storage,
     memory,
+    improvement,
   };
 }
 
@@ -899,10 +1115,19 @@ type RunState = {
   finalText: string;
   usage?: AgentUsage;
   messages: Map<string, { text: string; reasoning: string }>;
+  toolNames: Set<string>;
+  toolCount: number;
+  failedToolCount: number;
 };
 
 function createRunState(): RunState {
-  return { finalText: "", messages: new Map() };
+  return {
+    finalText: "",
+    messages: new Map(),
+    toolNames: new Set(),
+    toolCount: 0,
+    failedToolCount: 0,
+  };
 }
 
 async function handleControllerEvent(
@@ -942,6 +1167,8 @@ async function handleControllerEvent(
       return;
     }
     case "tool_start":
+      state.toolNames.add(event.toolName);
+      state.toolCount += 1;
       context.emit({
         type: "tool.started",
         payload: {
@@ -963,6 +1190,7 @@ async function handleControllerEvent(
       });
       return;
     case "tool_end":
+      if (event.isError) state.failedToolCount += 1;
       context.emit({
         type: event.isError ? "tool.failed" : "tool.completed",
         payload: {

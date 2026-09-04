@@ -17,6 +17,16 @@ import type {
   ScheduledTaskScope,
   UpdateScheduledTaskInput,
 } from "./schedule-protocol.js";
+import type {
+  AddImprovementFeedbackInput,
+  CreateImprovementCandidateInput,
+  EvaluateImprovementCandidateInput,
+  ImprovementScope,
+  ImprovementSnapshot,
+  RequestImprovementPublicationInput,
+  ResolveImprovementPublicationInput,
+  RollbackImprovementCandidateInput,
+} from "./improvement-protocol.js";
 import {
   isBrowserEvent,
   isBrowserKeyAction,
@@ -361,6 +371,27 @@ export interface OpenArtifexDesktopApi {
     delete(
       input: ScheduledTaskScope & { id: string },
     ): Promise<DesktopResult<void>>;
+  };
+  improvement: {
+    list(input: ImprovementScope): Promise<DesktopResult<ImprovementSnapshot>>;
+    addFeedback(
+      input: AddImprovementFeedbackInput,
+    ): Promise<DesktopResult<ImprovementSnapshot>>;
+    createCandidate(
+      input: CreateImprovementCandidateInput,
+    ): Promise<DesktopResult<ImprovementSnapshot>>;
+    evaluateCandidate(
+      input: EvaluateImprovementCandidateInput,
+    ): Promise<DesktopResult<ImprovementSnapshot>>;
+    requestPublication(
+      input: RequestImprovementPublicationInput,
+    ): Promise<DesktopResult<ImprovementSnapshot>>;
+    resolvePublication(
+      input: ResolveImprovementPublicationInput,
+    ): Promise<DesktopResult<ImprovementSnapshot>>;
+    rollback(
+      input: RollbackImprovementCandidateInput,
+    ): Promise<DesktopResult<ImprovementSnapshot>>;
   };
 }
 

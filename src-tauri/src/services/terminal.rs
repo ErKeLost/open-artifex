@@ -1,9 +1,9 @@
-use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{Command, Stdio};
+use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde_json::json;
 use tauri::{AppHandle, Emitter, State};
 
@@ -36,45 +36,51 @@ pub fn create<R: tauri::Runtime>(
     let rows = input.rows.unwrap_or(32).clamp(1, 1_000);
     let shell = default_shell();
 
-    let mut command = Command::new(&shell);
+    let pty_system = native_pty_system();
+    let pair = match pty_system.openpty(PtySize {
+        rows,
+        cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    }) {
+        Ok(pair) => pair,
+        Err(error) => return err("TERMINAL_UNAVAILABLE", error.to_string()),
+    };
+    let mut command = CommandBuilder::new(&shell);
     command.args(shell_arguments(&shell));
-    let child = command
-        .current_dir(&workspace_path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn();
-    let mut child = match child {
+    command.cwd(&workspace_path);
+    command.env("TERM", "xterm-256color");
+    command.env("COLORTERM", "truecolor");
+    let child = match pair.slave.spawn_command(command) {
         Ok(child) => child,
         Err(error) => return err("TERMINAL_UNAVAILABLE", error.to_string()),
     };
-
-    let stdin = child.stdin.take().expect("terminal stdin was piped");
-    let stdout = child.stdout.take().expect("terminal stdout was piped");
-    let stderr = child.stderr.take().expect("terminal stderr was piped");
+    let pid = child.process_id().unwrap_or_default();
+    let reader = match pair.master.try_clone_reader() {
+        Ok(reader) => reader,
+        Err(error) => return err("TERMINAL_UNAVAILABLE", error.to_string()),
+    };
+    let writer = match pair.master.take_writer() {
+        Ok(writer) => writer,
+        Err(error) => return err("TERMINAL_UNAVAILABLE", error.to_string()),
+    };
+    let master = pair.master;
     let output = Arc::new(Mutex::new(String::new()));
     let sequence = Arc::new(AtomicU64::new(0));
     spawn_reader(
         app.clone(),
         session_id.clone(),
-        stdout,
-        output.clone(),
-        sequence.clone(),
-    );
-    spawn_reader(
-        app,
-        session_id.clone(),
-        stderr,
+        reader,
         output.clone(),
         sequence.clone(),
     );
 
-    let pid = child.id();
     state.terminals.lock().unwrap().insert(
         session_id.clone(),
         TerminalRecord {
             child,
-            stdin,
+            master,
+            writer,
             output,
             sequence,
             cols,
@@ -102,9 +108,9 @@ pub fn write(input: TerminalWriteInput, state: State<'_, AppState>) -> DesktopRe
         return err("TERMINAL_UNAVAILABLE", "Terminal session is unavailable");
     };
     match record
-        .stdin
+        .writer
         .write_all(input.data.as_bytes())
-        .and_then(|_| record.stdin.flush())
+        .and_then(|_| record.writer.flush())
     {
         Ok(()) => ok(()),
         Err(error) => err("TERMINAL_UNAVAILABLE", error.to_string()),
@@ -121,6 +127,14 @@ pub fn resize(input: TerminalResizeInput, state: State<'_, AppState>) -> Desktop
     };
     record.cols = input.cols;
     record.rows = input.rows;
+    if let Err(error) = record.master.resize(PtySize {
+        rows: input.rows,
+        cols: input.cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    }) {
+        return err("TERMINAL_UNAVAILABLE", error.to_string());
+    }
     ok(())
 }
 
@@ -185,9 +199,18 @@ fn spawn_reader<R: tauri::Runtime>(
     sequence: Arc<AtomicU64>,
 ) {
     thread::spawn(move || {
-        let reader = BufReader::new(stream);
-        for line in reader.lines().flatten() {
-            let data = format!("{line}\n");
+        let mut reader = stream;
+        let mut buffer = [0_u8; 8 * 1024];
+        loop {
+            let bytes_read = match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(bytes_read) => bytes_read,
+                Err(_) => break,
+            };
+            // Read raw chunks instead of lines. Shell prompts do not end with
+            // a newline, and waiting for one makes an interactive terminal
+            // appear blank until the first command is submitted.
+            let data = String::from_utf8_lossy(&buffer[..bytes_read]).into_owned();
             {
                 let mut previous = output.lock().unwrap();
                 previous.push_str(&data);

@@ -225,6 +225,49 @@ pub struct ConversationCreateInput {
     pub title: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImprovementScopeInput {
+    pub workspace_path: String,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImprovementFeedbackInput {
+    #[serde(flatten)]
+    pub scope: ImprovementScopeInput,
+    pub trace_id: String,
+    pub rating: i8,
+    pub comment: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImprovementCandidateInput {
+    #[serde(flatten)]
+    pub scope: ImprovementScopeInput,
+    pub trace_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImprovementCandidateActionInput {
+    #[serde(flatten)]
+    pub scope: ImprovementScopeInput,
+    pub candidate_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImprovementPublicationDecisionInput {
+    #[serde(flatten)]
+    pub scope: ImprovementScopeInput,
+    pub candidate_id: String,
+    pub approved: bool,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationThread {

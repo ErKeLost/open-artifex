@@ -1,9 +1,12 @@
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::Deserialize;
+use std::time::Duration;
 
 use crate::types::{OpenRouterModel, OpenRouterModelReasoning};
 
 const MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(6);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
 
 #[derive(Deserialize)]
 struct ModelsResponse {
@@ -53,6 +56,8 @@ pub async fn models(api_key: Option<String>) -> Result<Vec<OpenRouterModel>, Str
 
     let client = reqwest::Client::builder()
         .default_headers(headers)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
         .build()
         .map_err(|error| error.to_string())?;
     let request = client.get(MODELS_URL);

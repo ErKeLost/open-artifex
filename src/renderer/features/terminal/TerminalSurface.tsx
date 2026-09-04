@@ -91,7 +91,11 @@ export function TerminalSurface({ port, theme = 'light', className, onTitleChang
   }
 
   return (
-    <div className={classes} data-state={state}>
+    <div
+      className={classes}
+      data-state={state}
+      onMouseDown={() => focus()}
+    >
       <Terminal
         aria-label="工作区终端"
         autoResize
@@ -121,4 +125,3 @@ export function TerminalSurface({ port, theme = 'light', className, onTitleChang
     </div>
   );
 }
-

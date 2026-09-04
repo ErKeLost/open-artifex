@@ -4,6 +4,7 @@ export { DesktopApp } from './session/DesktopApp';
 export * from './components';
 export * from './features/browser';
 export * from './features/composer';
+export * from './features/improvement';
 export * from './features/schedule';
 export * from './features/terminal';
 export * from './features/timeline';

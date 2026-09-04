@@ -29,10 +29,12 @@ export function ToolTimeline({
   const setRunExpanded = useTimelineUiStore((store) => store.setRunExpanded);
   const expanded = storedExpanded ?? initiallyExpanded;
   const summary = summaryLabel ?? formatTimelineSummary(items);
+  if (state === 'empty' && items.length === 0) return null;
 
   return (
     <Collapsible.Root
       className={cx('oa-timeline oa-timeline-disclosure', className)}
+      data-theme={theme}
       data-open={expanded}
       onOpenChange={(open) => setRunExpanded(runId, open)}
       open={expanded}

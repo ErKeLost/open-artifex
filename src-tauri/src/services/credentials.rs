@@ -9,10 +9,33 @@ const SERVICE: &str = "Open Artifex";
 const ACCOUNT: &str = "openrouter-api-key";
 
 pub fn status(state: &CredentialState) -> CredentialStatus {
-    let secure_storage_available = entry().is_ok();
-    let source = if read_secure().ok().flatten().is_some() {
+    // Prefer the submitted session credential. A keychain read immediately
+    // after set_password can block or lag on macOS and is not needed to report
+    // the state of the current process.
+    let source = if state.session_key.is_some() {
+        "session"
+    } else if read_secure().ok().flatten().is_some() {
         "safe-storage"
-    } else if state.session_key.is_some() {
+    } else if environment_key().is_some() {
+        "environment"
+    } else {
+        "missing"
+    };
+    CredentialStatus {
+        configured: source != "missing",
+        // A successful secure read proves availability. For session and
+        // environment credentials, storage availability is intentionally not
+        // probed synchronously.
+        secure_storage_available: source == "safe-storage" || source == "session",
+        source: source.into(),
+    }
+}
+
+/// Returns the status that can be computed without touching the OS credential
+/// provider. Save and clear commands use this variant so a slow Keychain never
+/// blocks an interactive request.
+fn session_status(state: &CredentialState) -> CredentialStatus {
+    let source = if state.session_key.is_some() {
         "session"
     } else if environment_key().is_some() {
         "environment"
@@ -21,7 +44,9 @@ pub fn status(state: &CredentialState) -> CredentialStatus {
     };
     CredentialStatus {
         configured: source != "missing",
-        secure_storage_available,
+        // A session credential is immediately usable; secure persistence is
+        // attempted in the background and must not delay this response.
+        secure_storage_available: state.session_key.is_some(),
         source: source.into(),
     }
 }
@@ -34,19 +59,26 @@ pub fn resolve(state: &CredentialState) -> Option<String> {
         .or_else(environment_key)
 }
 
-pub fn set(state: &mut CredentialState, api_key: String) -> Result<CredentialStatus, String> {
-    // Keychain reads can lag behind a successful write. Keep the submitted key
-    // for this session so the immediate verification always has a credential.
-    let _ = entry().and_then(|entry| entry.set_password(&api_key).map_err(keyring_error));
+pub fn set_session(state: &mut CredentialState, api_key: String) -> CredentialStatus {
+    // Keep the submitted key in process before any best-effort secure-storage
+    // work. This keeps verification responsive when macOS Keychain is slow.
     state.session_key = Some(api_key);
-    Ok(status(state))
+    session_status(state)
 }
 
-pub fn clear(state: &mut CredentialState) -> Result<CredentialStatus, String> {
+pub fn clear_session(state: &mut CredentialState) -> CredentialStatus {
     state.session_key = None;
+    session_status(state)
+}
+
+pub fn persist_secure(api_key: &str) {
+    let _ = entry().and_then(|entry| entry.set_password(api_key).map_err(keyring_error));
+}
+
+pub fn clear_secure() -> Result<(), String> {
     let entry = entry()?;
     match entry.delete_credential() {
-        Ok(()) | Err(Error::NoEntry) => Ok(status(state)),
+        Ok(()) | Err(Error::NoEntry) => Ok(()),
         Err(error) => Err(keyring_error(error)),
     }
 }

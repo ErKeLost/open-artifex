@@ -36,7 +36,10 @@
   width: 100%;
 }
 
+.oa-composer textarea:focus,
 .oa-composer textarea:focus-visible {
+  border-color: transparent;
+  box-shadow: none;
   outline: none;
 }
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ThemeProvider } from "@lobehub/ui";
 import { App } from "../App";
 import { useScheduleStore } from "../features/schedule";
+import { useImprovementStore } from "../features/improvement";
 import { useInventoryStore } from "../features/inventory";
 import { SettingsDialog } from "../features/settings";
 import { TooltipProvider } from "../components/ui/tooltip";
@@ -64,6 +65,29 @@ export function DesktopApp() {
   const createSchedule = useScheduleStore((state) => state.create);
   const setSchedulePaused = useScheduleStore((state) => state.setPaused);
   const deleteSchedule = useScheduleStore((state) => state.remove);
+  const improvementStatus = useImprovementStore((state) => state.status);
+  const improvementError = useImprovementStore((state) => state.error);
+  const improvementSnapshot = useImprovementStore((state) => state.snapshot);
+  const initializeImprovement = useImprovementStore((state) => state.initialize);
+  const refreshImprovement = useImprovementStore((state) => state.refresh);
+  const addImprovementFeedback = useImprovementStore(
+    (state) => state.addFeedback,
+  );
+  const createImprovementCandidate = useImprovementStore(
+    (state) => state.createCandidate,
+  );
+  const evaluateImprovementCandidate = useImprovementStore(
+    (state) => state.evaluateCandidate,
+  );
+  const requestImprovementPublication = useImprovementStore(
+    (state) => state.requestPublication,
+  );
+  const resolveImprovementPublication = useImprovementStore(
+    (state) => state.resolvePublication,
+  );
+  const rollbackImprovementCandidate = useImprovementStore(
+    (state) => state.rollback,
+  );
   const inventoryStatus = useInventoryStore((state) => state.status);
   const inventoryError = useInventoryStore((state) => state.error);
   const gitOverview = useInventoryStore((state) => state.overview);
@@ -88,16 +112,20 @@ export function DesktopApp() {
       reasoningEffort: selectedReasoningEffort,
     };
     void initializeSchedules(scope);
+    void initializeImprovement(scope);
     const interval = window.setInterval(() => {
       void refreshSchedules(scope);
+      void refreshImprovement(scope);
       void refreshConversations();
     }, 30_000);
     return () => window.clearInterval(interval);
   }, [
     credentials?.configured,
     initializeSchedules,
+    initializeImprovement,
     refreshConversations,
     refreshSchedules,
+    refreshImprovement,
     selectedModel,
     selectedReasoningEffort,
     workspace,
@@ -143,6 +171,65 @@ export function DesktopApp() {
           onCreateSchedule={createSchedule}
           onDeleteSchedule={deleteSchedule}
           onSetSchedulePaused={setSchedulePaused}
+          improvementError={improvementError}
+          improvementSnapshot={improvementSnapshot}
+          improvementStatus={improvementStatus}
+          onAddImprovementFeedback={async (trace, rating) => {
+            if (!workspace) throw new Error("请先选择工作区");
+            await addImprovementFeedback({
+              workspacePath: workspace.path,
+              model: selectedModel ?? appInfo?.defaultModel,
+              reasoningEffort: selectedReasoningEffort,
+              traceId: trace.traceId,
+              rating,
+            });
+          }}
+          onCreateImprovementCandidate={async (trace) => {
+            if (!workspace) throw new Error("请先选择工作区");
+            await createImprovementCandidate({
+              workspacePath: workspace.path,
+              model: selectedModel ?? appInfo?.defaultModel,
+              reasoningEffort: selectedReasoningEffort,
+              traceId: trace.traceId,
+            });
+          }}
+          onEvaluateImprovementCandidate={async (candidate) => {
+            if (!workspace) throw new Error("请先选择工作区");
+            await evaluateImprovementCandidate({
+              workspacePath: workspace.path,
+              model: selectedModel ?? appInfo?.defaultModel,
+              reasoningEffort: selectedReasoningEffort,
+              candidateId: candidate.id,
+            });
+          }}
+          onRequestImprovementPublication={async (candidate) => {
+            if (!workspace) throw new Error("请先选择工作区");
+            await requestImprovementPublication({
+              workspacePath: workspace.path,
+              model: selectedModel ?? appInfo?.defaultModel,
+              reasoningEffort: selectedReasoningEffort,
+              candidateId: candidate.id,
+            });
+          }}
+          onResolveImprovementPublication={async (candidate, approved) => {
+            if (!workspace) throw new Error("请先选择工作区");
+            await resolveImprovementPublication({
+              workspacePath: workspace.path,
+              model: selectedModel ?? appInfo?.defaultModel,
+              reasoningEffort: selectedReasoningEffort,
+              candidateId: candidate.id,
+              approved,
+            });
+          }}
+          onRollbackImprovementCandidate={async (candidate) => {
+            if (!workspace) throw new Error("请先选择工作区");
+            await rollbackImprovementCandidate({
+              workspacePath: workspace.path,
+              model: selectedModel ?? appInfo?.defaultModel,
+              reasoningEffort: selectedReasoningEffort,
+              candidateId: candidate.id,
+            });
+          }}
           gitOverview={gitOverview}
           inventoryError={inventoryError}
           inventoryStatus={inventoryStatus}

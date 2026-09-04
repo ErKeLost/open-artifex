@@ -15,6 +15,7 @@ import { useState, useSyncExternalStore, type MouseEvent } from "react";
 import { RightUtilityPanel, WorkspaceSidebar } from "./components";
 import { Composer, type ComposerProps } from "./features/composer";
 import { ScheduleView, type ScheduleStoreStatus } from "./features/schedule";
+import { ImprovementView, type ImprovementStoreStatus } from "./features/improvement";
 import {
   PluginsView,
   PullRequestsView,
@@ -31,6 +32,11 @@ import type {
   CreateScheduledTaskInput,
   ScheduledTask,
 } from "../shared/schedule-protocol.js";
+import type {
+  ImprovementCandidate,
+  ImprovementSnapshot,
+  ImprovementTrace,
+} from "../shared/improvement-protocol.js";
 import type {
   GitOverview,
   PluginSummary,
@@ -93,6 +99,27 @@ export interface AppProps {
   onCreateSchedule?: (input: CreateScheduledTaskInput) => Promise<void>;
   onSetSchedulePaused?: (task: ScheduledTask, paused: boolean) => Promise<void>;
   onDeleteSchedule?: (id: string) => Promise<void>;
+  improvementSnapshot?: ImprovementSnapshot;
+  improvementStatus?: ImprovementStoreStatus;
+  improvementError?: string;
+  onAddImprovementFeedback?: (
+    trace: ImprovementTrace,
+    rating: 1 | -1,
+  ) => Promise<void>;
+  onCreateImprovementCandidate?: (trace: ImprovementTrace) => Promise<void>;
+  onEvaluateImprovementCandidate?: (
+    candidate: ImprovementCandidate,
+  ) => Promise<void>;
+  onRequestImprovementPublication?: (
+    candidate: ImprovementCandidate,
+  ) => Promise<void>;
+  onResolveImprovementPublication?: (
+    candidate: ImprovementCandidate,
+    approved: boolean,
+  ) => Promise<void>;
+  onRollbackImprovementCandidate?: (
+    candidate: ImprovementCandidate,
+  ) => Promise<void>;
   inventoryStatus?: InventoryStatus;
   inventoryError?: string;
   gitOverview?: GitOverview;
@@ -181,6 +208,15 @@ export function App({
   onCreateSchedule,
   onSetSchedulePaused,
   onDeleteSchedule,
+  improvementSnapshot = { traces: [], candidates: [] },
+  improvementStatus = "idle",
+  improvementError,
+  onAddImprovementFeedback,
+  onCreateImprovementCandidate,
+  onEvaluateImprovementCandidate,
+  onRequestImprovementPublication,
+  onResolveImprovementPublication,
+  onRollbackImprovementCandidate,
   inventoryStatus = "idle",
   inventoryError,
   gitOverview,
@@ -196,7 +232,7 @@ export function App({
     theme === "system" ? (systemDark ? "dark" : "light") : theme;
   const [utilityOpen, setUtilityOpen] = useState(false);
   const [activeView, setActiveView] = useState<
-    "conversation" | "schedule" | "pull-requests" | "plugins"
+    "conversation" | "schedule" | "improvement" | "pull-requests" | "plugins"
   >("conversation");
   const taskTitle = workspaceName ? `${workspaceName} 会话` : "新对话";
 
@@ -308,6 +344,7 @@ export function App({
           }}
           onOpenSettings={onOpenSettings}
           onOpenSchedules={() => setActiveView("schedule")}
+          onOpenImprovement={() => setActiveView("improvement")}
           onOpenPullRequests={() => setActiveView("pull-requests")}
           onOpenPlugins={() => setActiveView("plugins")}
           activeThreadId={activeThreadId}
@@ -335,6 +372,24 @@ export function App({
               tasks={scheduledTasks}
               threadId={threadId}
               workspacePath={workspacePath}
+            />
+          ) : activeView === "improvement" &&
+            onAddImprovementFeedback &&
+            onCreateImprovementCandidate &&
+            onEvaluateImprovementCandidate &&
+            onRequestImprovementPublication &&
+            onResolveImprovementPublication &&
+            onRollbackImprovementCandidate ? (
+            <ImprovementView
+              error={improvementError}
+              onCreateCandidate={onCreateImprovementCandidate}
+              onEvaluate={onEvaluateImprovementCandidate}
+              onFeedback={onAddImprovementFeedback}
+              onRequestPublication={onRequestImprovementPublication}
+              onResolvePublication={onResolveImprovementPublication}
+              onRollback={onRollbackImprovementCandidate}
+              snapshot={improvementSnapshot}
+              status={improvementStatus}
             />
           ) : activeView === "pull-requests" ? (
             <PullRequestsView
@@ -386,7 +441,7 @@ export function App({
                   </div>
                 ) : null}
 
-                {timelineItems.length ? (
+                {timelineItems.some((item) => item.kind !== "reasoning") ? (
                   <section
                     className="oa-timeline-showcase"
                     aria-label="执行记录"

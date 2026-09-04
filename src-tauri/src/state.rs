@@ -1,7 +1,8 @@
 use crate::services::agent::AgentBridge;
+use portable_pty::{Child as PtyChild, MasterPty};
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin};
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
@@ -19,8 +20,9 @@ pub struct CredentialState {
 }
 
 pub struct TerminalRecord {
-    pub child: Child,
-    pub stdin: ChildStdin,
+    pub child: Box<dyn PtyChild + Send + Sync>,
+    pub master: Box<dyn MasterPty + Send>,
+    pub writer: Box<dyn Write + Send>,
     pub output: Arc<Mutex<String>>,
     pub sequence: Arc<AtomicU64>,
     pub cols: u16,

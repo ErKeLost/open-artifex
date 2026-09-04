@@ -9,6 +9,7 @@ import {
   PencilSimpleLine,
   Plugs,
   Plus,
+  Sparkle,
 } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
 import type { WorkspaceSelection } from "../../shared/desktop-api.js";
@@ -27,6 +28,7 @@ export interface WorkspaceSidebarProps {
   onOpenSchedules?: () => void;
   onOpenPullRequests?: () => void;
   onOpenPlugins?: () => void;
+  onOpenImprovement?: () => void;
   onOpenSettings?: () => void;
 }
 
@@ -42,14 +44,19 @@ export function WorkspaceSidebar({
   onOpenSchedules,
   onOpenPullRequests,
   onOpenPlugins,
+  onOpenImprovement,
   onOpenSettings,
 }: WorkspaceSidebarProps) {
+  const projectThreads = threads;
+
   return (
     <aside className="oa-sidebar" aria-label="会话导航">
       <div className="oa-sidebar__topline">
         <Button
           aria-label="切换工作区"
           className="oa-sidebar__product"
+          onClick={() => onSelectWorkspace?.()}
+          disabled={!onSelectWorkspace}
           type="button"
           variant="ghost"
         >
@@ -89,29 +96,41 @@ export function WorkspaceSidebar({
           <CalendarDots aria-hidden="true" size={16} weight="regular" />
           <span>定时任务</span>
         </Button>
+        <Button
+          disabled={!onOpenImprovement}
+          onClick={onOpenImprovement}
+          type="button"
+          variant="ghost"
+        >
+          <Sparkle aria-hidden="true" size={16} weight="regular" />
+          <span>改进中心</span>
+        </Button>
         <Button disabled={!onOpenPlugins} onClick={onOpenPlugins} type="button" variant="ghost">
           <Plugs aria-hidden="true" size={16} weight="regular" />
           <span>插件</span>
         </Button>
       </nav>
 
-      <SidebarSection label="置顶">
-        {threads.slice(0, 1).map((thread) => (
-          <Button
-            className="oa-sidebar__conversation"
-            key={thread.id}
-            onClick={() => onSelectThread?.(thread.id)}
-            type="button"
-            variant="ghost"
-          >
-            <span>{thread.title}</span>
-          </Button>
-        ))}
-      </SidebarSection>
-
-      <SidebarSection label="项目" className="oa-sidebar__projects">
+      <SidebarSection
+        action={
+          onNewTask ? (
+            <Button
+              aria-label="在当前项目中新建对话"
+              onClick={onNewTask}
+              size="icon-xs"
+              title="新建对话"
+              type="button"
+              variant="ghost"
+            >
+              <Plus aria-hidden="true" size={14} weight="bold" />
+            </Button>
+          ) : undefined
+        }
+        label="项目"
+        className="oa-sidebar__projects"
+      >
         <Button
-          className="oa-sidebar__project"
+          className="oa-sidebar__project oa-sidebar__project--current"
           disabled={!onSelectWorkspace}
           onClick={() => onSelectWorkspace?.()}
           title={workspacePath}
@@ -121,20 +140,29 @@ export function WorkspaceSidebar({
           <FolderSimple aria-hidden="true" size={16} weight="regular" />
           <span>{workspaceName}</span>
         </Button>
-        {threads
-          .filter((thread) => thread.id === activeThreadId)
-          .map((thread) => (
+        <div className="oa-sidebar__project-tasks">
+          {projectThreads.map((thread) => (
             <Button
-              className="oa-sidebar__conversation oa-sidebar__conversation--active"
+              className={`oa-sidebar__conversation${
+                thread.id === activeThreadId
+                  ? " oa-sidebar__conversation--active"
+                  : ""
+              }`}
               key={thread.id}
               onClick={() => onSelectThread?.(thread.id)}
               type="button"
               variant="ghost"
             >
               <span>{thread.title}</span>
-              <i aria-label="当前会话" />
+              {thread.id === activeThreadId ? <i aria-label="当前会话" /> : null}
             </Button>
           ))}
+          {projectThreads.length === 0 ? (
+            <span className="oa-sidebar__empty oa-sidebar__empty--nested">
+              暂无会话
+            </span>
+          ) : null}
+        </div>
         {workspaces
           .filter((project) => project.path !== workspacePath)
           .map((project) => (
@@ -153,21 +181,7 @@ export function WorkspaceSidebar({
       </SidebarSection>
 
       <SidebarSection label="最近" className="oa-sidebar__recent">
-        {threads.length > 1 ? (
-          threads.slice(1).map((thread) => (
-            <Button
-              className="oa-sidebar__conversation"
-              key={thread.id}
-              onClick={() => onSelectThread?.(thread.id)}
-              type="button"
-              variant="ghost"
-            >
-              <span>{thread.title}</span>
-            </Button>
-          ))
-        ) : (
-          <span className="oa-sidebar__empty">暂无更多会话</span>
-        )}
+        <span className="oa-sidebar__empty">暂无其他项目会话</span>
       </SidebarSection>
 
       <div className="oa-sidebar__spacer" />
@@ -202,16 +216,21 @@ function SidebarSection({
   label,
   children,
   className,
+  action,
 }: {
   label: string;
   children: ReactNode;
   className?: string;
+  action?: ReactNode;
 }) {
   return (
     <section
       className={["oa-sidebar__section", className].filter(Boolean).join(" ")}
     >
-      <h2>{label}</h2>
+      <div className="oa-sidebar__section-header">
+        <h2>{label}</h2>
+        {action}
+      </div>
       <div>{children}</div>
     </section>
   );

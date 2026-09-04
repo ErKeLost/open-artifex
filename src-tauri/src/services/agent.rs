@@ -19,6 +19,7 @@ pub struct AgentBridge {
     pending_browser: Arc<Mutex<HashMap<String, Sender<Value>>>>,
     pending_schedule: Arc<Mutex<HashMap<String, Sender<Value>>>>,
     pending_conversation: Arc<Mutex<HashMap<String, Sender<Value>>>>,
+    pending_improvement: Arc<Mutex<HashMap<String, Sender<Value>>>>,
 }
 
 impl Default for AgentBridge {
@@ -28,6 +29,7 @@ impl Default for AgentBridge {
             pending_browser: Arc::new(Mutex::new(HashMap::new())),
             pending_schedule: Arc::new(Mutex::new(HashMap::new())),
             pending_conversation: Arc::new(Mutex::new(HashMap::new())),
+            pending_improvement: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -147,6 +149,35 @@ impl AgentBridge {
             .map_err(|_| "Conversation operation timed out".to_string())
     }
 
+    pub fn request_improvement<R: tauri::Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        command: Value,
+    ) -> Result<Value, String> {
+        let request_id = crate::services::new_id("improvement");
+        let (sender, receiver) = mpsc::channel();
+        self.pending_improvement
+            .lock()
+            .map_err(|_| "Agent bridge lock poisoned".to_string())?
+            .insert(request_id.clone(), sender);
+        let message = json!({
+            "version": 1,
+            "type": "improvement.command",
+            "requestId": request_id,
+            "command": command,
+        });
+        if let Err(error) = self.send(app, message) {
+            self.pending_improvement
+                .lock()
+                .ok()
+                .and_then(|mut pending| pending.remove(&request_id));
+            return Err(error);
+        }
+        receiver
+            .recv_timeout(Duration::from_secs(60))
+            .map_err(|_| "Improvement operation timed out".to_string())
+    }
+
     pub fn stop(&self) {
         if let Ok(mut guard) = self.child.lock() {
             if let Some(mut child) = guard.take() {
@@ -191,6 +222,7 @@ impl AgentBridge {
         let pending_browser = self.pending_browser.clone();
         let pending_schedule = self.pending_schedule.clone();
         let pending_conversation = self.pending_conversation.clone();
+        let pending_improvement = self.pending_improvement.clone();
 
         thread::spawn(move || {
             for line in BufReader::new(stdout).lines().flatten() {
@@ -231,6 +263,15 @@ impl AgentBridge {
                     Some("conversation.response") => {
                         if let Some(id) = value.get("requestId").and_then(Value::as_str) {
                             if let Ok(mut pending) = pending_conversation.lock() {
+                                if let Some(sender) = pending.remove(id) {
+                                    let _ = sender.send(value);
+                                }
+                            }
+                        }
+                    }
+                    Some("improvement.response") => {
+                        if let Some(id) = value.get("requestId").and_then(Value::as_str) {
+                            if let Ok(mut pending) = pending_improvement.lock() {
                                 if let Some(sender) = pending.remove(id) {
                                     let _ = sender.send(value);
                                 }

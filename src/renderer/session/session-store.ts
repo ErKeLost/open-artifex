@@ -13,6 +13,10 @@ import type {
   OpenRouterModel,
   OpenRouterReasoningEffort,
 } from "../../shared/openrouter-protocol.js";
+import {
+  supportsMultimodalInput,
+  supportsTextConversation,
+} from "../../shared/openrouter-protocol.js";
 import { adaptAgentEventsToTimeline } from "../features/timeline/agent-event-adapter";
 import type { TimelineItem } from "../features/timeline/timeline.types";
 import type { BrowserPort } from "../features/browser";
@@ -144,6 +148,20 @@ function persistModelSelection(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "桌面会话初始化失败";
+}
+
+function withTimeout<Value>(
+  operation: Promise<Value>,
+  milliseconds: number,
+  message: string,
+): Promise<Value> {
+  let timeoutId: number | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error(message)), milliseconds);
+  });
+  return Promise.race([operation, timeout]).finally(() => {
+    if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+  });
 }
 
 function resultValue<Value>(
@@ -510,23 +528,34 @@ export const useAppSessionStore = create<AppSessionState>((set, get) => ({
   },
 
   async setOpenRouterKey(apiKey) {
-    const credentials = resultValue(
-      await runtimeApi().credentials.setOpenRouterKey({ apiKey }),
-    );
+    const credentials = resultValue(await withTimeout(
+      runtimeApi().credentials.setOpenRouterKey({ apiKey }),
+      8_000,
+      "保存密钥超时，请检查系统凭据存储后重试",
+    ));
     set({ credentials, error: undefined });
     try {
-      resultValue(await runtimeApi().credentials.verifyOpenRouterKey());
+      resultValue(await withTimeout(
+        runtimeApi().credentials.verifyOpenRouterKey(),
+        15_000,
+        "OpenRouter 验证超时，请检查网络连接后重试",
+      ));
     } catch (verificationError) {
       throw new Error(
         `密钥已保存，但 OpenRouter 验证失败：${errorMessage(verificationError)}`,
       );
     }
-    await get()
-      .refreshModels()
-      .catch(() => undefined);
-    await get().refreshConversations();
-    const browser = await createBrowserPort(get(), get().threadId);
-    if (browser) set({ browserPort: browser });
+
+    // These are convenience refreshes. They must never keep the settings dialog
+    // in its pending state after the credential itself has been verified.
+    void (async () => {
+      await get().refreshModels().catch(() => undefined);
+      await get().refreshConversations().catch(() => undefined);
+      const browser = await createBrowserPort(get(), get().threadId).catch(
+        () => undefined,
+      );
+      if (browser) set({ browserPort: browser });
+    })();
   },
 
   async clearOpenRouterKey() {
@@ -548,10 +577,19 @@ export const useAppSessionStore = create<AppSessionState>((set, get) => ({
     try {
       const catalog = resultValue(await runtimeApi().models.list());
       const latest = get();
+      const eligibleModels = catalog.models.filter(
+        (item) => supportsTextConversation(item) && supportsMultimodalInput(item),
+      );
+      const defaultModel = latest.appInfo?.defaultModel;
       const selectedModel =
-        latest.selectedModel ??
-        latest.appInfo?.defaultModel ??
-        catalog.models[0]?.id;
+        (latest.selectedModel &&
+        eligibleModels.some((item) => item.id === latest.selectedModel)
+          ? latest.selectedModel
+          : undefined) ??
+        (defaultModel && eligibleModels.some((item) => item.id === defaultModel)
+          ? defaultModel
+          : undefined) ??
+        eligibleModels[0]?.id;
       const model = catalog.models.find((item) => item.id === selectedModel);
       const selectedReasoningEffort = resolveReasoningEffort(
         model,

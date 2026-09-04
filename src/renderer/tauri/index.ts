@@ -37,6 +37,16 @@ import type {
   UpdateScheduledTaskInput,
 } from "../../shared/schedule-protocol.js";
 import type {
+  AddImprovementFeedbackInput,
+  CreateImprovementCandidateInput,
+  EvaluateImprovementCandidateInput,
+  ImprovementScope,
+  ImprovementSnapshot,
+  RequestImprovementPublicationInput,
+  ResolveImprovementPublicationInput,
+  RollbackImprovementCandidateInput,
+} from "../../shared/improvement-protocol.js";
+import type {
   BrowserEvent,
   BrowserSessionState,
 } from "../../shared/browser-protocol.js";
@@ -152,6 +162,34 @@ export const tauriApi: OpenArtifexDesktopApi = Object.freeze({
       call<ScheduledTask>(TAURI_COMMANDS.scheduleUpdate, { input }),
     delete: (input: ScheduledTaskScope & { id: string }) =>
       call<void>(TAURI_COMMANDS.scheduleDelete, { input }),
+  },
+  improvement: {
+    list: (input: ImprovementScope) =>
+      call<ImprovementSnapshot>(TAURI_COMMANDS.improvementList, { input }),
+    addFeedback: (input: AddImprovementFeedbackInput) =>
+      call<ImprovementSnapshot>(TAURI_COMMANDS.improvementAddFeedback, { input }),
+    createCandidate: (input: CreateImprovementCandidateInput) =>
+      call<ImprovementSnapshot>(
+        TAURI_COMMANDS.improvementCreateCandidate,
+        { input },
+      ),
+    evaluateCandidate: (input: EvaluateImprovementCandidateInput) =>
+      call<ImprovementSnapshot>(
+        TAURI_COMMANDS.improvementEvaluateCandidate,
+        { input },
+      ),
+    requestPublication: (input: RequestImprovementPublicationInput) =>
+      call<ImprovementSnapshot>(
+        TAURI_COMMANDS.improvementRequestPublication,
+        { input },
+      ),
+    resolvePublication: (input: ResolveImprovementPublicationInput) =>
+      call<ImprovementSnapshot>(
+        TAURI_COMMANDS.improvementResolvePublication,
+        { input },
+      ),
+    rollback: (input: RollbackImprovementCandidateInput) =>
+      call<ImprovementSnapshot>(TAURI_COMMANDS.improvementRollback, { input }),
   },
 });
 

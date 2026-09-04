@@ -1,4 +1,5 @@
 use std::env;
+use std::time::Duration;
 
 use rfd::FileDialog;
 use serde_json::{json, Value};
@@ -18,13 +19,17 @@ use crate::types::{
     ConversationCreateInput, ConversationMessage, ConversationMessagesInput,
     ConversationScopeInput, ConversationThread, CreateScheduledTaskInput, CredentialStatus,
     CredentialVerification, DeleteScheduledTaskInput, DesktopResult, GitOverview,
-    OpenRouterModelCatalog, PluginSummary, ScheduleListInput, ScheduledTask, TerminalCreateInput,
-    TerminalKillInput, TerminalResizeInput, TerminalSession, TerminalSessionInput,
-    TerminalSnapshot, TerminalWriteInput, UpdateScheduledTaskInput, WorkspacePathInput,
-    WorkspaceSelection, WorkspaceSelectionOptions,
+    ImprovementCandidateActionInput, ImprovementCandidateInput, ImprovementFeedbackInput,
+    ImprovementPublicationDecisionInput, ImprovementScopeInput, OpenRouterModelCatalog,
+    PluginSummary, ScheduleListInput, ScheduledTask, TerminalCreateInput, TerminalKillInput,
+    TerminalResizeInput, TerminalSession, TerminalSessionInput, TerminalSnapshot,
+    TerminalWriteInput, UpdateScheduledTaskInput, WorkspacePathInput, WorkspaceSelection,
+    WorkspaceSelectionOptions,
 };
 
 const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4";
+const OPENROUTER_CONNECT_TIMEOUT: Duration = Duration::from_secs(6);
+const OPENROUTER_REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
 
 #[tauri::command]
 pub async fn app_info<R: tauri::Runtime>(app: AppHandle<R>) -> DesktopResult<AppInfo> {
@@ -38,7 +43,13 @@ pub async fn app_info<R: tauri::Runtime>(app: AppHandle<R>) -> DesktopResult<App
 
 #[tauri::command]
 pub fn credential_status(state: State<'_, AppState>) -> DesktopResult<CredentialStatus> {
-    let credentials = state.credentials.lock().unwrap();
+    // Do not hold the application credential mutex while the status helper
+    // performs a possible Keychain read. A slow OS provider must not block a
+    // concurrent save or verification request from acquiring the session key.
+    let snapshot = state.credentials.lock().unwrap().session_key.clone();
+    let credentials = crate::state::CredentialState {
+        session_key: snapshot,
+    };
     ok(credentials::status(&credentials))
 }
 
@@ -50,18 +61,21 @@ pub fn credential_set(
     if api_key.trim().len() < 20 || api_key.len() > 16_384 {
         return err("INVALID_ARGUMENT", "OpenRouter API key is invalid");
     }
-    match credentials::set(&mut state.credentials.lock().unwrap(), api_key) {
-        Ok(status) => ok(status),
-        Err(error) => err("SECURE_STORAGE_UNAVAILABLE", error),
-    }
+    let status = credentials::set_session(&mut state.credentials.lock().unwrap(), api_key.clone());
+
+    // Keychain can occasionally wait on the OS. It must never keep a user
+    // interaction or OpenRouter verification pending.
+    std::thread::spawn(move || credentials::persist_secure(&api_key));
+    ok(status)
 }
 
 #[tauri::command]
 pub fn credential_clear(state: State<'_, AppState>) -> DesktopResult<CredentialStatus> {
-    match credentials::clear(&mut state.credentials.lock().unwrap()) {
-        Ok(status) => ok(status),
-        Err(error) => err("SECURE_STORAGE_UNAVAILABLE", error),
-    }
+    let status = credentials::clear_session(&mut state.credentials.lock().unwrap());
+    std::thread::spawn(|| {
+        let _ = credentials::clear_secure();
+    });
+    ok(status)
 }
 
 #[tauri::command]
@@ -77,7 +91,15 @@ pub async fn credential_verify(
             ))
         }
     };
-    let response = match reqwest::Client::new()
+    let client = match reqwest::Client::builder()
+        .connect_timeout(OPENROUTER_CONNECT_TIMEOUT)
+        .timeout(OPENROUTER_REQUEST_TIMEOUT)
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => return Ok(err("CREDENTIAL_UNAVAILABLE", error.to_string())),
+    };
+    let response = match client
         .get("https://openrouter.ai/api/v1/auth/key")
         .bearer_auth(api_key)
         .send()
@@ -426,6 +448,159 @@ pub fn conversation_create<R: tauri::Runtime>(
     {
         Some(thread) => ok(thread),
         None => err("AGENT_UNAVAILABLE", "Conversation response is invalid"),
+    }
+}
+
+#[tauri::command]
+pub fn improvement_list<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    input: ImprovementScopeInput,
+    state: State<'_, AppState>,
+) -> DesktopResult<Value> {
+    improvement_request(&app, &state, input, json!({"operation":"list"}))
+}
+
+#[tauri::command]
+pub fn improvement_add_feedback<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    input: ImprovementFeedbackInput,
+    state: State<'_, AppState>,
+) -> DesktopResult<Value> {
+    if input.rating != 1 && input.rating != -1 {
+        return err("INVALID_ARGUMENT", "Improvement rating is invalid");
+    }
+    improvement_request(
+        &app,
+        &state,
+        input.scope,
+        json!({
+            "operation":"add-feedback",
+            "traceId": input.trace_id,
+            "rating": input.rating,
+            "comment": input.comment,
+        }),
+    )
+}
+
+#[tauri::command]
+pub fn improvement_create_candidate<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    input: ImprovementCandidateInput,
+    state: State<'_, AppState>,
+) -> DesktopResult<Value> {
+    improvement_request(
+        &app,
+        &state,
+        input.scope,
+        json!({"operation":"create-candidate", "traceId": input.trace_id}),
+    )
+}
+
+#[tauri::command]
+pub fn improvement_evaluate_candidate<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    input: ImprovementCandidateActionInput,
+    state: State<'_, AppState>,
+) -> DesktopResult<Value> {
+    improvement_request(
+        &app,
+        &state,
+        input.scope,
+        json!({"operation":"evaluate-candidate", "candidateId": input.candidate_id}),
+    )
+}
+
+#[tauri::command]
+pub fn improvement_request_publication<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    input: ImprovementCandidateActionInput,
+    state: State<'_, AppState>,
+) -> DesktopResult<Value> {
+    improvement_request(
+        &app,
+        &state,
+        input.scope,
+        json!({"operation":"request-publication", "candidateId": input.candidate_id}),
+    )
+}
+
+#[tauri::command]
+pub fn improvement_resolve_publication<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    input: ImprovementPublicationDecisionInput,
+    state: State<'_, AppState>,
+) -> DesktopResult<Value> {
+    improvement_request(
+        &app,
+        &state,
+        input.scope,
+        json!({
+            "operation":"resolve-publication",
+            "candidateId": input.candidate_id,
+            "approved": input.approved,
+        }),
+    )
+}
+
+#[tauri::command]
+pub fn improvement_rollback<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    input: ImprovementCandidateActionInput,
+    state: State<'_, AppState>,
+) -> DesktopResult<Value> {
+    improvement_request(
+        &app,
+        &state,
+        input.scope,
+        json!({"operation":"rollback", "candidateId": input.candidate_id}),
+    )
+}
+
+fn improvement_request<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    state: &State<'_, AppState>,
+    input: ImprovementScopeInput,
+    command: Value,
+) -> DesktopResult<Value> {
+    let workspace_path = match resolve_workspace(state, Some(&input.workspace_path)) {
+        Ok(path) => path,
+        Err(error) => return err("NOT_AUTHORIZED", error),
+    };
+    let api_key = match credentials::resolve(&state.credentials.lock().unwrap()) {
+        Some(api_key) => api_key,
+        None => {
+            return err(
+                "CREDENTIAL_MISSING",
+                "Configure an OpenRouter API key first",
+            )
+        }
+    };
+    let (model, reasoning_effort) =
+        match resolve_model_selection(input.model, input.reasoning_effort) {
+            Ok(selection) => selection,
+            Err(error) => return err("INVALID_ARGUMENT", error),
+        };
+    let request = json!({
+        "workspacePath": workspace_path.to_string_lossy(),
+        "threadId": "improvement-control",
+        "model": model,
+        "reasoningEffort": reasoning_effort,
+        "provider": {"kind":"openrouter", "apiKey": api_key, "model": model},
+        "improvement": command,
+    });
+    match state.agent.request_improvement(app, request) {
+        Ok(value) if value.get("ok").and_then(Value::as_bool) == Some(true) => {
+            ok(value.get("value").cloned().unwrap_or(Value::Null))
+        }
+        Ok(value) => err(
+            "IMPROVEMENT_UNAVAILABLE",
+            value
+                .get("error")
+                .and_then(|error| error.get("message"))
+                .and_then(Value::as_str)
+                .unwrap_or("Improvement operation failed"),
+        ),
+        Err(error) => err("IMPROVEMENT_UNAVAILABLE", error),
     }
 }
 

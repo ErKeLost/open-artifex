@@ -193,6 +193,11 @@ export interface AgentConversationRuntime {
   execute(command: JsonValue): Promise<JsonValue>;
 }
 
+/** Controlled self-improvement APIs backed by Mastra workflows and storage. */
+export interface AgentImprovementRuntime {
+  execute(command: JsonValue): Promise<JsonValue>;
+}
+
 /**
  * Dependency-inversion seam implemented by `src/agent/runtime.ts`.
  * Implementations may use Mastra internally; callers in the Tauri bridge and renderer may not.
@@ -206,6 +211,7 @@ export interface AgentRuntime {
   browser?: AgentBrowserRuntime;
   schedules?: AgentScheduleRuntime;
   conversations?: AgentConversationRuntime;
+  improvement?: AgentImprovementRuntime;
   dispose?(): Promise<void>;
 }
 
@@ -252,6 +258,12 @@ export type MainToAgentMessage =
       type: "conversation.command";
       requestId: string;
       command: JsonValue;
+    }
+  | {
+      version: typeof AGENT_PROTOCOL_VERSION;
+      type: "improvement.command";
+      requestId: string;
+      command: JsonValue;
     };
 
 export type AgentToMainMessage =
@@ -296,6 +308,14 @@ export type AgentToMainMessage =
   | {
       version: typeof AGENT_PROTOCOL_VERSION;
       type: "conversation.response";
+      requestId: string;
+      ok: boolean;
+      value?: JsonValue;
+      error?: AgentError;
+    }
+  | {
+      version: typeof AGENT_PROTOCOL_VERSION;
+      type: "improvement.response";
       requestId: string;
       ok: boolean;
       value?: JsonValue;
@@ -385,6 +405,7 @@ export function isMainToAgentMessage(
       );
     case "schedule.command":
     case "conversation.command":
+    case "improvement.command":
       return (
         isBoundedString(value.requestId, MAX_ID_LENGTH) &&
         isJsonValue(value.command)
@@ -419,6 +440,7 @@ export function isAgentToMainMessage(
       return isBrowserEvent(value.event);
     case "schedule.response":
     case "conversation.response":
+    case "improvement.response":
       return (
         isBoundedString(value.requestId, MAX_ID_LENGTH) &&
         typeof value.ok === "boolean" &&

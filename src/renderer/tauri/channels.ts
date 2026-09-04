@@ -35,6 +35,13 @@ export const TAURI_COMMANDS = {
   scheduleCreate: "schedule_create",
   scheduleUpdate: "schedule_update",
   scheduleDelete: "schedule_delete",
+  improvementList: "improvement_list",
+  improvementAddFeedback: "improvement_add_feedback",
+  improvementCreateCandidate: "improvement_create_candidate",
+  improvementEvaluateCandidate: "improvement_evaluate_candidate",
+  improvementRequestPublication: "improvement_request_publication",
+  improvementResolvePublication: "improvement_resolve_publication",
+  improvementRollback: "improvement_rollback",
 } as const;
 
 export const TAURI_EVENTS = {

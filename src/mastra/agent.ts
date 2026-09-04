@@ -1,4 +1,5 @@
 import { Agent } from "@mastra/core/agent";
+import path from "node:path";
 import { SkillSearchProcessor } from "@mastra/core/processors";
 import { createTool } from "@mastra/core/tools";
 import { LocalFilesystem, Workspace } from "@mastra/core/workspace";
@@ -16,7 +17,7 @@ const filesystem = new LocalFilesystem({
 
 export const openArtifexWorkspace = new Workspace({
   id: "open-artifex-workspace",
-  name: "Open Artifex Workspace",
+  name: path.basename(workspaceRoot),
   filesystem,
   skills: [
     ".agents/skills",

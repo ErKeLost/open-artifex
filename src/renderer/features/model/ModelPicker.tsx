@@ -4,14 +4,18 @@ import type {
   OpenRouterModel,
   OpenRouterReasoningEffort,
 } from "../../../shared/openrouter-protocol.js";
-import { Button } from "../../components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "../../components/ui/dialog";
+  supportsMultimodalInput,
+  supportsTextConversation,
+} from "../../../shared/openrouter-protocol.js";
+import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
+import {
+  Popover,
+  PopoverClose,
+  PopoverContent,
+  PopoverTrigger,
+} from "../../components/ui/popover";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import {
   Select,
@@ -49,6 +53,31 @@ function compactModelName(model: OpenRouterModel | undefined, value?: string) {
   return model.name.replace(/^[^:]+:\s*/, "");
 }
 
+function fuzzyScore(value: string, query: string): number | undefined {
+  if (!query) return 0;
+  const source = value.toLocaleLowerCase();
+  const needle = query.toLocaleLowerCase();
+  const directIndex = source.indexOf(needle);
+  if (directIndex >= 0) {
+    return 10_000 + needle.length * 20 - directIndex;
+  }
+
+  let cursor = 0;
+  let score = 0;
+  let previousIndex = -2;
+  for (const character of needle) {
+    const index = source.indexOf(character, cursor);
+    if (index < 0) return undefined;
+    score += index === previousIndex + 1 ? 24 : 7;
+    if (index === 0 || " /:-_".includes(source[index - 1] ?? "")) {
+      score += 10;
+    }
+    previousIndex = index;
+    cursor = index + 1;
+  }
+  return score - source.length * 0.01;
+}
+
 export function ModelPicker({
   className,
   disabled = false,
@@ -65,13 +94,29 @@ export function ModelPicker({
   const [query, setQuery] = useState("");
   const activeModel = selectedModel(models, value);
   const efforts = activeModel?.reasoning?.supportedEfforts ?? [];
+  const eligibleModels = useMemo(
+    () =>
+      models.filter(
+        (model) =>
+          supportsTextConversation(model) && supportsMultimodalInput(model),
+      ),
+    [models],
+  );
   const visibleModels = useMemo(() => {
     const keyword = query.trim().toLocaleLowerCase();
-    if (!keyword) return models;
-    return models.filter((model) =>
-      `${model.name} ${model.id}`.toLocaleLowerCase().includes(keyword),
-    );
-  }, [models, query]);
+    if (!keyword) return eligibleModels;
+    return eligibleModels
+      .map((model, index) => ({
+        model,
+        index,
+        score: fuzzyScore(`${model.name} ${model.id}`, keyword),
+      }))
+      .filter((item) => item.score !== undefined)
+      .sort((left, right) =>
+        (right.score ?? 0) - (left.score ?? 0) || left.index - right.index,
+      )
+      .map((item) => item.model);
+  }, [eligibleModels, query]);
 
   const chooseModel = (modelId: string) => {
     onSelectModel(modelId);
@@ -79,31 +124,47 @@ export function ModelPicker({
   };
 
   return (
-    <Dialog onOpenChange={setOpen} open={open}>
-      <Button
-        aria-label="选择模型与推理强度"
-        className={["oa-model-picker__trigger", className]
-          .filter(Boolean)
-          .join(" ")}
-        disabled={disabled}
-        onClick={() => setOpen(true)}
-        title="选择模型与推理强度"
-        type="button"
-        variant="ghost"
-      >
-        <span>{compactModelName(activeModel, value)}</span>
-        {reasoningEffort ? (
-          <span className="oa-model-picker__effort">{reasoningEffort}</span>
-        ) : null}
-        <ChevronDown aria-hidden="true" size={14} />
-      </Button>
+    <Popover
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (!nextOpen) setQuery("");
+      }}
+      open={open}
+    >
+      <PopoverTrigger
+        render={
+          <Button
+            aria-label="选择模型与推理强度"
+            className={["oa-model-picker__trigger", className]
+              .filter(Boolean)
+              .join(" ")}
+            disabled={disabled}
+            title="选择模型与推理强度"
+            type="button"
+            variant="ghost"
+          >
+            <span>{compactModelName(activeModel, value)}</span>
+            {reasoningEffort ? (
+              <span className="oa-model-picker__effort">{reasoningEffort}</span>
+            ) : null}
+            <ChevronDown aria-hidden="true" size={14} />
+          </Button>
+        }
+      />
 
-      <DialogContent className="oa-model-picker" showCloseButton={false}>
-        <DialogHeader className="oa-model-picker__header">
+      <PopoverContent
+        align="end"
+        className="oa-model-picker"
+        side="top"
+        sideOffset={8}
+      >
+        <div className="oa-model-picker__header">
           <div>
-            <DialogTitle>模型</DialogTitle>
+            <strong>模型</strong>
             <span>
-              {models.length ? `${models.length} 个可用模型` : "模型目录"}
+              {eligibleModels.length
+                ? `${eligibleModels.length} 个文本多模态模型`
+                : "模型目录"}
             </span>
           </div>
           <div className="oa-model-picker__header-actions">
@@ -123,18 +184,21 @@ export function ModelPicker({
                 }
               />
             </Button>
-            <Button
-              aria-label="关闭模型选择"
-              onClick={() => setOpen(false)}
-              size="icon-sm"
-              title="关闭模型选择"
-              type="button"
-              variant="ghost"
+            <PopoverClose
+              render={
+                <Button
+                  aria-label="关闭模型选择"
+                  size="icon-sm"
+                  title="关闭模型选择"
+                  type="button"
+                  variant="ghost"
+                />
+              }
             >
               <X aria-hidden="true" />
-            </Button>
+            </PopoverClose>
           </div>
-        </DialogHeader>
+        </div>
 
         <label className="oa-model-picker__search">
           <Search aria-hidden="true" size={15} />
@@ -177,6 +241,9 @@ export function ModelPicker({
                       <small>{model.id}</small>
                     </span>
                     <span className="oa-model-picker__model-meta">
+                      <span>
+                        {supportsMultimodalInput(model) ? "多模态" : "文本"}
+                      </span>
                       {model.reasoning?.supportedEfforts.length ? "推理" : null}
                       {active ? <Check aria-hidden="true" size={15} /> : null}
                     </span>
@@ -228,7 +295,7 @@ export function ModelPicker({
             </dl>
           </aside>
         </div>
-      </DialogContent>
-    </Dialog>
+      </PopoverContent>
+    </Popover>
   );
 }

@@ -15,6 +15,15 @@ pub fn initial_state() -> WorkspaceState {
     let persisted = fs::read_to_string(&storage_path)
         .ok()
         .and_then(|value| serde_json::from_str::<PersistedWorkspaceState>(&value).ok());
+    let persisted_default_is_legacy = persisted
+        .as_ref()
+        .and_then(|value| value.default_path.as_ref())
+        .is_some_and(|path| {
+            legacy_default_path
+                .as_ref()
+                .map(|legacy| Path::new(path) == legacy)
+                .unwrap_or(false)
+        });
     let default_path = persisted
         .as_ref()
         .and_then(|value| value.default_path.as_ref())
@@ -32,6 +41,7 @@ pub fn initial_state() -> WorkspaceState {
         recent: Vec::new(),
         storage_path,
     };
+    let mut migrated_legacy_workspace = persisted_default_is_legacy;
     let _ = std::fs::create_dir_all(&state.default_path);
     if let Ok(path) = canonical_directory(&state.default_path) {
         state.allowed.insert(path);
@@ -40,12 +50,24 @@ pub fn initial_state() -> WorkspaceState {
         .map(|value| value.recent_paths)
         .unwrap_or_default()
     {
+        if legacy_default_path
+            .as_ref()
+            .map(|legacy| Path::new(&path) == legacy)
+            .unwrap_or(false)
+        {
+            migrated_legacy_workspace = true;
+            continue;
+        }
         if let Ok(path) = canonical_directory(path) {
             remember(&mut state, path, false);
         }
     }
     if let Ok(path) = canonical_directory(&state.default_path) {
         remember(&mut state, path, false);
+    }
+    if migrated_legacy_workspace {
+        // Migrate app state only. The legacy directory remains untouched on disk.
+        let _ = persist(&state);
     }
     state
 }
